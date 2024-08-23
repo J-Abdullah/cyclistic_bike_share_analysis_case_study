@@ -1,0 +1,321 @@
+---
+title: "Cyclistic Bike Share Analysis"
+author: "Jawad028"
+date: "2024-08-23"
+output: html_document
+---
+
+## Business Task
+
+The goal is to analyze the differences in how annual members and casual riders use Cyclistic bikes to identify patterns that can inform marketing strategies. The objective is to convert casual riders into annual members by adjusting the membership plans based on their riding behavior. This analysis will provide insights to the stakeholders for targeted marketing campaigns to increase annual memberships.
+
+## Key Stakeholders
+
+-   **Lily Moreno**: Director of Marketing
+-   **Cyclistic Marketing Analytics Team**
+-   **Cyclistic Executive Team**
+
+## Insights and Business Decisions
+
+1.  **Targeted Marketing Campaigns**: Design campaigns that appeal to casual riders, especially those who ride on weekends.
+2.  **Pricing Strategy**: Consider introducing a membership package tailored for weekend riders.
+3.  **Digital Media Tactics**: Use data-driven insights to target casual riders with personalized offers.
+
+## Dataset Description
+
+The dataset includes 12 months of bike trip data from 07-2023 to 07-2024, containing the following key columns:
+
+-   **ride_id**: Unique identifier for each ride.
+-   **rideable_type**: Type of bike (e.g., electric, classic).
+-   **started_at**: Start date and time of the ride.
+-   **ended_at**: End date and time of the ride.
+-   **member_casual**: Indicates whether the rider is a member or a casual user.
+-   Plus additional columns related to station details and coordinates.
+
+## Data Analysis Process
+
+## Combinig data from different file
+
+```{r}
+library(tidyverse)
+file_list <- list.files(path="Dataset",pattern="*.csv",full.names=TRUE)
+combined_df <- file_list %>%
+  map_dfr(read_csv)
+```
+
+```{r}
+cat("Data Information\n")
+print(glimpse(combined_df))
+cat("\nNull Values:\n")
+print(summarise_all(combined_df,~sum(is.na(.))))
+```
+
+## Dropping null values and saving data as new csv
+
+```{r}
+cleaned_df <- combined_df %>%
+  drop_na()
+write_csv(cleaned_df,"cyclistic-0723-0724_cleaned.csv")
+```
+
+## Process creating new columns
+
+### I have made a mistake while combining the data some datasets have values of started_at ended_at in mileseconds but others have only seconds that why when we use difftime some rows return seconds as double that give error in sprintf we use as.interger
+
+```{r}
+cleaned_df <- cleaned_df %>%
+  mutate(
+    ride_length_seconds = as.numeric(difftime(ended_at, started_at, units = "secs")),
+    ride_length = seconds_to_period(ride_length_seconds),
+    ride_length = sprintf("%02d:%02d:%02d", hour(ride_length), minute(ride_length), as.integer(second(ride_length))),
+    week_day = wday(started_at, label = TRUE)
+  )
+```
+
+### Checking and removing negative values
+
+```{r}
+negative_rides <- cleaned_df %>% filter(ride_length_seconds < 0)
+print(negative_rides)
+```
+
+```{r}
+# Remove negative ride lengths
+cleaned_df <- cleaned_df %>% filter(ride_length_seconds >= 0)
+```
+
+## Checking Outliers
+
+### This step should be performed at this point but I find out outliers while making box plot that how I know the threshold should be 2000
+
+```{r}
+threshold_minutes <- 2000
+threshold_seconds <- threshold_minutes * 60  # 2000 minutes * 60 = 120,000 seconds
+
+# Identify rides longer than 2000 minutes
+long_rides <- cleaned_df %>%
+  filter(ride_length_seconds > threshold_seconds)
+
+long_rides
+```
+
+```{r}
+# Remove these outliers from the dataset
+cleaned_df <- cleaned_df %>%
+  filter(ride_length_seconds <= threshold_seconds)
+```
+
+## Descriptive analysis
+
+### Average ride length and other statistics
+
+```{r}
+seconds_to_hms <- function(seconds) {  seconds<-round(seconds)
+  sprintf("%02d:%02d:%02d", seconds %/% 3600, (seconds %% 3600) %/% 60, seconds %% 60)
+}
+
+ride_stats <- (summary(cleaned_df$ride_length_seconds))
+
+ride_stats_hms <- sapply(ride_stats,seconds_to_hms)
+
+ride_stats_hms
+
+```
+
+### Which day has the highest number of rides
+
+```{r}
+mode_day_of_week <- cleaned_df %>% 
+  count(week_day) %>% 
+  arrange(desc(n)) %>% 
+  slice(1) %>% 
+  pull(week_day)
+print(paste("Mode of day_of_week:", mode_day_of_week))
+```
+
+### Average ride_length and umber of rides for members and weekdays
+
+```{r}
+# Function to convert seconds to HMS format
+seconds_to_hms <- function(seconds) {
+  hours <- floor(seconds / 3600)
+  minutes <- floor((seconds %% 3600) / 60)
+  secs <- round(seconds %% 60)
+  sprintf("%02d:%02d:%02d", hours, minutes, secs)
+}
+```
+
+**Average Ride Length by customer Type**
+
+```{r}
+average_ride_by_members <- cleaned_df %>% 
+  group_by(member_casual) %>% 
+  summarise(average_ride_length = mean(ride_length_seconds, na.rm =TRUE))
+
+# Convert seconds to HMS format
+average_ride_by_members <- average_ride_by_members %>%
+  mutate(average_ride_length_hms = seconds_to_hms(average_ride_length))
+
+average_ride_by_members
+```
+
+**Total number of rides by Customer type**
+
+```{r}
+rides_by_member <- cleaned_df %>% 
+  group_by(member_casual) %>% 
+  summarise(number_of_rides =n()) %>% 
+  arrange(desc(number_of_rides))
+
+# Calculate the total number of rides
+total_rides <- sum(rides_by_member$number_of_rides)
+
+# Add percentage column
+rides_by_member <- rides_by_member %>% 
+  mutate(percentage = (number_of_rides / total_rides) * 100)
+
+rides_by_member
+
+```
+
+**Ride length by weekday and member**
+
+```{r}
+average_ride_by_weekday <- cleaned_df %>% 
+  group_by(week_day,member_casual) %>% 
+  summarise(average_ride_length = mean(ride_length_seconds, na.rm =TRUE)) %>% 
+  arrange(desc(average_ride_length))
+
+# Convert seconds to HMS format
+average_ride_by_weekday <- average_ride_by_weekday %>%
+  mutate(average_ride_length_hms = seconds_to_hms(average_ride_length))
+
+average_ride_by_weekday
+```
+
+**Number of Rides by weekday and member**
+
+```{r}
+rides_by_weekday_and_member <- cleaned_df %>% 
+  group_by(week_day,member_casual) %>% 
+  summarise(number_of_rides =n()) %>% 
+  arrange(desc(number_of_rides))
+
+rides_by_weekday_and_member
+```
+
+**Number of rides by ride type**
+
+```{r}
+rides_by_ridetype_and_member <- cleaned_df %>% 
+  group_by(rideable_type,member_casual) %>% 
+  summarise(number_of_rides =n()) %>% 
+  arrange(desc(number_of_rides))
+
+rides_by_ridetype_and_member
+```
+
+## Visualize using different plot
+
+### Ride Length Comparison Between Members and Casual Riders:
+
+```{r}
+ggplot(cleaned_df,aes(x=member_casual,y=ride_length_seconds/60,fill=member_casual)) +
+  geom_boxplot() +
+  labs (title = "Ride Lengths by User Type", x = "User Type", y = "Ride Length (minutes)") +
+  theme_minimal()
+
+  
+```
+
+### Number of Rides by Day of the Week for Members and Casual Riders
+
+```{r}
+ggplot(cleaned_df, aes(x = week_day, fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Number of Rides by Day of the Week and User Type", x = "Day of the Week", y = "Number of Rides") +
+  theme_minimal()
+```
+
+### Average Ride Length by Day of the Week for Members and Casual Riders:
+
+```{r}
+avg_ride_length_by_day <- cleaned_df %>%
+  group_by(week_day, member_casual) %>%
+  summarise(average_ride_length = mean(ride_length_seconds, na.rm = TRUE))
+
+ggplot(avg_ride_length_by_day, aes(x = week_day, y = average_ride_length/60, color = member_casual, group = member_casual)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Average Ride Length by Day of the Week and User Type", x = "Day of the Week", y = "Average Ride Length (minutes)") +
+  theme_minimal()
+```
+
+### Total Number of Rides by Month for Members and Casual Riders:
+
+```{r}
+cleaned_df <- cleaned_df %>%
+  mutate(month = format(started_at, "%Y-%m"))
+
+ggplot(cleaned_df, aes(x = month, fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Total Number of Rides by Month and User Type", x = "Month", y = "Number of Rides") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Ride Length Distribution for Members and Casual Riders:
+
+```{r}
+ggplot(cleaned_df, aes(x = ride_length_seconds, fill = member_casual)) +
+  geom_histogram(binwidth = 60, position = "dodge", alpha = 0.7) +
+  labs(title = "Ride Length Distribution by User Type", x = "Ride Length (seconds)", y = "Frequency") +
+  theme_minimal()
+```
+
+### Ride Type Usage by Members and Casual Riders:
+
+```{r}
+ggplot(cleaned_df, aes(x = rideable_type, fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Rideable Type Usage by User Type", x = "Rideable Type", y = "Number of Rides") +
+  theme_minimal()
+```
+
+### Facet Grid of Ride Lengths by User Type and Day of the Week:
+
+```{r}
+ggplot(cleaned_df, aes(x = ride_length_seconds/60)) +
+  geom_histogram(binwidth = 60, fill = "purple", color = "black") +
+  facet_grid(member_casual ~ week_day) +
+  labs(title = "Ride Lengths by User Type and Day of the Week", x = "Ride Length (minutes)", y = "Frequency") +
+  theme_minimal()
+```
+
+## Analysis Results
+
+-   **Mean Ride Length**: Approximately 10 minutes.
+-   **Min/Max Ride Length**: Ranges from 0 to 114 hours.
+-   **Members vs. Casual Riders**:
+    -   Members account for 64% of total rides, while casual riders account for 36%.
+    -   Casual riders have a longer average ride time (24 minutes 14 seconds) compared to members (12 minutes 36 seconds).
+
+## Weekly Patterns
+
+-   **Most Popular Day**: Saturday, especially among casual riders.
+-   **Usage Trends**: Casual riders tend to use bikes more on weekends for leisure, while members use them more during weekdays, possibly for commuting.
+-   **Seasonality**: Ride numbers drop during winter.
+
+## Key Findings
+
+1.  **Ride Distribution**: Members have shorter but more frequent rides, while casual riders have longer rides, especially on weekends.
+2.  **Bike Type Preference**: Classic bikes are the most popular, with electric bikes being used by about half as many riders. Docked bikes are used exclusively by casual riders.
+3.  **Seasonal Influence**: Ride frequency decreases significantly during winter.
+
+## Recommendations
+
+1.  **Introduce a Weekend-Focused Membership Package**: To attract casual riders who primarily ride on weekends.
+2.  **Targeted Marketing Campaigns**: Focus on weekends to convert casual riders to members.
+3.  **Promote Electric Bikes**: Increase the promotion of electric bikes to boost their usage among both casual and member riders.
+
+
